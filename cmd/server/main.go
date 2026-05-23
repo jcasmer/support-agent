@@ -58,7 +58,9 @@ func main() {
 
 	// Register routes wrapped with rate limiting middleware
 	mux := http.NewServeMux()
-	mux.Handle("/v1/support", http.HandlerFunc(supportHandler.Handle))
+	mux.Handle("/v1/support", rateLimiter.Limit(
+		middleware.RequestID(http.HandlerFunc(supportHandler.Handle)),
+	))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

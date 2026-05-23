@@ -3,11 +3,10 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
+	"github.com/jcasmer/support-agent/internal/adapters/in/http/middleware"
 	"github.com/jcasmer/support-agent/internal/core"
 )
 
@@ -42,6 +41,7 @@ type supportResponse struct {
 	TicketID   string `json:"ticket_id,omitempty"`
 	TokensUsed int    `json:"tokens_used"`
 	DurationMs int64  `json:"duration_ms"`
+	RequestID  string `json:"request_id"`
 }
 
 // errorResponse is the standard error envelope
@@ -53,28 +53,31 @@ type errorResponse struct {
 
 // Handle processes a support request
 func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
+	requestID := middleware.FromContext(r.Context())
+
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only POST is accepted", "")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only POST is accepted", requestID)
 		return
 	}
 
 	var req supportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON", "")
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON", requestID)
 		return
 	}
 	defer r.Body.Close()
 
 	if req.Query == "" {
-		writeError(w, http.StatusBadRequest, "missing_field", "query is required", req.SessionID)
+		writeError(w, http.StatusBadRequest, "missing_field", "query is required", requestID)
 		return
 	}
 
 	if req.SessionID == "" {
-		req.SessionID = generateSessionID()
+		req.SessionID = requestID
 	}
 
 	slog.Info("support request received",
+		"request_id", requestID,
 		"session_id", req.SessionID,
 		"query_length", len(req.Query),
 	)
@@ -82,10 +85,11 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	result, err := h.runner.Run(r.Context(), req.SessionID, req.Query)
 	if err != nil {
 		slog.Error("orchestration failed",
+			"request_id", requestID,
 			"session_id", req.SessionID,
 			"error", err,
 		)
-		writeError(w, http.StatusInternalServerError, "orchestration_error", "failed to process support request", req.SessionID)
+		writeError(w, http.StatusInternalServerError, "orchestration_error", "failed to process support request", requestID)
 		return
 	}
 
@@ -97,6 +101,7 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 		TicketID:   result.TicketID,
 		TokensUsed: result.TokensUsed,
 		DurationMs: result.Duration.Milliseconds(),
+		RequestID:  requestID,
 	})
 }
 
@@ -116,9 +121,4 @@ func writeError(w http.ResponseWriter, status int, code, message, requestID stri
 		Message:   message,
 		RequestID: requestID,
 	})
-}
-
-// generateSessionID generates a simple time-based session ID
-func generateSessionID() string {
-	return fmt.Sprintf("sess-%d", time.Now().UnixNano())
 }
